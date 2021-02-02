@@ -19,6 +19,13 @@
  * warnings that our backported versions are unused and we can remove them.
  */
 #![allow(unstable_name_collisions)]
+/*
+ * Clippy's style advice is definitely valuable, but not worth the trouble for
+ * automated enforcement.
+ */
+#![allow(clippy::style)]
+#![allow(clippy::expect_fun_call)]
+#![allow(clippy::unit_arg)]
 
 mod example_provision;
 mod rust_features;

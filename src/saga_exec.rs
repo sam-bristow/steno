@@ -1118,7 +1118,7 @@ impl SagaExecutor {
                 let depth = max_parent_depth.unwrap() + 1;
                 max_depth_of_node.insert(node, depth);
 
-                nodes_at_depth.entry(depth).or_insert(Vec::new()).push(node);
+                nodes_at_depth.entry(depth).or_insert_with(Vec::new).push(node);
             }
 
             SagaExecStatus {
@@ -1569,7 +1569,7 @@ impl SagaContext {
             .await
             .child_sagas
             .entry(self.node_id)
-            .or_insert(Vec::new())
+            .or_insert_with(Vec::new)
             .push(Arc::clone(&e));
         e
     }

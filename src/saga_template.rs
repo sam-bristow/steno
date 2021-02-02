@@ -94,7 +94,7 @@ impl SagaTemplate {
      * Returns an object that can be used to print a graphiz-format
      * representation of the underlying node graph.
      */
-    pub fn dot<'a>(&'a self) -> SagaTemplateDot<'a> {
+    pub fn dot(&self) -> SagaTemplateDot<'_> {
         SagaTemplateDot(&self.graph)
     }
 }

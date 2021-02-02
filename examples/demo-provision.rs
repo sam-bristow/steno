@@ -2,6 +2,12 @@
  * Command-line tool for demo'ing saga interfaces
  */
 
+/*
+ * Clippy's style advice is definitely valuable, but not worth the trouble for
+ * automated enforcement.
+ */
+#![allow(clippy::style)]
+
 use anyhow::Context;
 use std::fs;
 use std::path::PathBuf;
