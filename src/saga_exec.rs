@@ -2,6 +2,7 @@
 
 use crate::rust_features::ExpectNone;
 use crate::saga_action::SagaAction;
+use crate::saga_action::SagaActionError;
 use crate::saga_action::SagaActionInjectError;
 use crate::saga_action::SagaActionOutput;
 use crate::saga_action::SagaActionResult;
@@ -42,7 +43,7 @@ use uuid::Uuid;
  * whole thing is a message passing exercise?
  */
 struct SgnsDone(Arc<JsonValue>);
-struct SgnsFailed(SagaError);
+struct SgnsFailed(SagaActionError);
 struct SgnsUndone(SagaUndoMode);
 
 struct SagaNode<S: SagaNodeStateType> {
@@ -122,7 +123,9 @@ impl SagaNodeRest for SagaNode<SgnsDone> {
 
 impl SagaNodeRest for SagaNode<SgnsFailed> {
     fn log_event(&self) -> SagaNodeEventType {
-        SagaNodeEventType::Failed
+        // XXX error case
+        let serialized = serde_json::to_value(&self.state.0).unwrap();
+        SagaNodeEventType::Failed(Arc::new(serialized))
     }
 
     fn propagate(

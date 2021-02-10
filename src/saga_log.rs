@@ -36,7 +36,7 @@ pub enum SagaNodeEventType {
     /** The action completed successfully (with output data) */
     Succeeded(Arc<JsonValue>),
     /** The action failed */
-    Failed,
+    Failed(Arc<JsonValue>),
     /** The undo action has started running */
     UndoStarted,
     /** The undo action has finished */
@@ -48,7 +48,7 @@ impl fmt::Display for SagaNodeEventType {
         f.write_str(match self {
             SagaNodeEventType::Started => "started",
             SagaNodeEventType::Succeeded(_) => "succeeded",
-            SagaNodeEventType::Failed => "failed",
+            SagaNodeEventType::Failed(_) => "failed",
             SagaNodeEventType::UndoStarted => "undo started",
             SagaNodeEventType::UndoFinished => "undo finished",
         })
@@ -97,7 +97,7 @@ impl SagaNodeLoadStatus {
                 SagaNodeLoadStatus::Started,
                 SagaNodeEventType::Succeeded(out),
             ) => Ok(SagaNodeLoadStatus::Succeeded(Arc::clone(out))),
-            (SagaNodeLoadStatus::Started, SagaNodeEventType::Failed) => {
+            (SagaNodeLoadStatus::Started, SagaNodeEventType::Failed(_)) => {
                 Ok(SagaNodeLoadStatus::Failed)
             }
             (
@@ -293,7 +293,7 @@ impl SagaLog {
              */
             SagaNodeEventType::Started => 1,
             SagaNodeEventType::Succeeded(_) => 2,
-            SagaNodeEventType::Failed => 3,
+            SagaNodeEventType::Failed(_) => 3,
             SagaNodeEventType::UndoStarted => 4,
             SagaNodeEventType::UndoFinished => 5,
         });

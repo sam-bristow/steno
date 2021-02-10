@@ -1,8 +1,6 @@
 //! Definition of Action trait, core implementations, and related facilities
 
 use crate::saga_exec::SagaContext;
-use anyhow::anyhow;
-use anyhow::Context;
 use async_trait::async_trait;
 use core::any::type_name;
 use core::fmt;
@@ -10,20 +8,33 @@ use core::fmt::Debug;
 use core::future::Future;
 use core::marker::PhantomData;
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
+use thiserror::Error;
 
 /*
  * Result, output, and error types used for actions
  */
 
+// XXX remove this?
 /** Error produced by a saga action or a saga itself */
 pub type SagaError = anyhow::Error;
 
+#[derive(Debug, Deserialize, Error, Serialize)]
+pub enum SagaActionError {
+    #[error("action failed")]
+    ActionFailed { source_error: JsonValue },
+    #[error("failed to serialize action's result")]
+    SerializeFailed { message: String },
+    #[error("error injected")]
+    InjectedError,
+}
+
 /** Result of a saga action */
 // TODO-cleanup can we drop this Arc?
-pub type SagaActionResult = Result<Arc<JsonValue>, SagaError>;
+pub type SagaActionResult = Result<Arc<JsonValue>, SagaActionError>;
 /** Result of a saga undo action */
 pub type SagaUndoResult = Result<(), SagaError>;
 
@@ -42,7 +53,7 @@ pub type SagaUndoResult = Result<(), SagaError>;
  * another layer above `SagaAction` that does this.  This gets complicated and
  * doesn't seem especially useful yet.
  */
-pub type SagaFuncResult<T> = Result<T, SagaError>;
+pub type SagaFuncResult<T, E> = Result<T, E>;
 
 /**
  * Success return type for functions that are used as saga actions
@@ -157,14 +168,8 @@ pub struct SagaActionInjectError {}
 
 #[async_trait]
 impl SagaAction for SagaActionInjectError {
-    async fn do_it(&self, sgctx: SagaContext) -> SagaActionResult {
-        let message = format!(
-            "<boom! error injected instead of action for \
-            node \"{}\">",
-            sgctx.node_label()
-        );
-        eprintln!("{}", message);
-        Err(anyhow!("{}", message))
+    async fn do_it(&self, _: SagaContext) -> SagaActionResult {
+        Err(SagaActionError::InjectedError)
     }
 
     async fn undo_it(&self, _: SagaContext) -> SagaUndoResult {
@@ -194,8 +199,9 @@ pub struct SagaActionFunc<
     UndoFuncType,
 > where
     ActionFuncType: Fn(SagaContext) -> ActionFutType + Send + Sync + 'static,
-    ActionFutType:
-        Future<Output = SagaFuncResult<ActionFuncOutput>> + Send + 'static,
+    ActionFutType: Future<Output = SagaFuncResult<ActionFuncOutput, SagaActionError>>
+        + Send
+        + 'static,
     ActionFuncOutput: SagaActionOutput + 'static,
     UndoFuncType: Fn(SagaContext) -> UndoFutType + Send + Sync + 'static,
     UndoFutType: Future<Output = SagaUndoResult> + Send + 'static,
@@ -243,8 +249,9 @@ impl<
     >
 where
     ActionFuncType: Fn(SagaContext) -> ActionFutType + Send + Sync + 'static,
-    ActionFutType:
-        Future<Output = SagaFuncResult<ActionFuncOutput>> + Send + 'static,
+    ActionFutType: Future<Output = SagaFuncResult<ActionFuncOutput, SagaActionError>>
+        + Send
+        + 'static,
     ActionFuncOutput: SagaActionOutput + 'static,
     UndoFuncType: Fn(SagaContext) -> UndoFutType + Send + Sync + 'static,
     UndoFutType: Future<Output = SagaUndoResult> + Send + 'static,
@@ -288,8 +295,9 @@ pub fn new_action_noop_undo<ActionFutType, ActionFuncType, ActionFuncOutput>(
 ) -> Arc<dyn SagaAction>
 where
     ActionFuncType: Fn(SagaContext) -> ActionFutType + Send + Sync + 'static,
-    ActionFutType:
-        Future<Output = SagaFuncResult<ActionFuncOutput>> + Send + 'static,
+    ActionFutType: Future<Output = SagaFuncResult<ActionFuncOutput, SagaActionError>>
+        + Send
+        + 'static,
     ActionFuncOutput: SagaActionOutput + 'static,
 {
     SagaActionFunc::new_action(f, undo_noop)
@@ -312,24 +320,23 @@ impl<
     >
 where
     ActionFuncType: Fn(SagaContext) -> ActionFutType + Send + Sync + 'static,
-    ActionFutType:
-        Future<Output = SagaFuncResult<ActionFuncOutput>> + Send + 'static,
+    ActionFutType: Future<Output = SagaFuncResult<ActionFuncOutput, SagaActionError>>
+        + Send
+        + 'static,
     ActionFuncOutput: SagaActionOutput + 'static,
     UndoFuncType: Fn(SagaContext) -> UndoFutType + Send + Sync + 'static,
     UndoFutType: Future<Output = SagaUndoResult> + Send + 'static,
 {
     async fn do_it(&self, sgctx: SagaContext) -> SagaActionResult {
-        let label = sgctx.node_label().to_owned();
         let fut = { (self.action_func)(sgctx) };
         /*
          * Execute the caller's function and translate its type into the generic
          * JsonValue that the framework uses to store action outputs.
          */
         fut.await
-            .with_context(|| format!("executing node \"{}\"", label))
             .and_then(|func_output| {
-                serde_json::to_value(func_output).with_context(|| {
-                    format!("serializing output from node \"{}\"", label)
+                serde_json::to_value(func_output).map_err(|e| {
+                    SagaActionError::SerializeFailed { message: e.to_string() }
                 })
             })
             .map(Arc::new)
@@ -357,8 +364,9 @@ impl<
     >
 where
     ActionFuncType: Fn(SagaContext) -> ActionFutType + Send + Sync + 'static,
-    ActionFutType:
-        Future<Output = SagaFuncResult<ActionFuncOutput>> + Send + 'static,
+    ActionFutType: Future<Output = SagaFuncResult<ActionFuncOutput, SagaActionError>>
+        + Send
+        + 'static,
     ActionFuncOutput: SagaActionOutput + 'static,
     UndoFuncType: Fn(SagaContext) -> UndoFutType + Send + Sync + 'static,
     UndoFutType: Future<Output = SagaUndoResult> + Send + 'static,

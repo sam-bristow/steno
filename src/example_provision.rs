@@ -3,6 +3,7 @@
  */
 
 use crate::new_action_noop_undo;
+use crate::SagaActionError;
 use crate::SagaContext;
 use crate::SagaFuncResult;
 use crate::SagaTemplate;
@@ -10,6 +11,7 @@ use crate::SagaTemplateBuilder;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
+use thiserror::Error;
 
 /*
  * Demo provision saga:
@@ -35,6 +37,26 @@ use std::sync::Arc;
  *              v
  *          boot instance
  */
+
+#[derive(Debug, Deserialize, Error, Serialize)]
+enum ExampleError {
+    #[error("example error")]
+    AnError,
+}
+
+type ExFuncResult<T> = SagaFuncResult<T, SagaActionError>;
+
+/* TODO-cleanup can we implement this generically? */
+impl From<ExampleError> for SagaActionError {
+    fn from(t: ExampleError) -> SagaActionError {
+        match serde_json::to_value(t) {
+            Ok(source_error) => SagaActionError::ActionFailed { source_error },
+            Err(serialize_error) => SagaActionError::SerializeFailed {
+                message: serialize_error.to_string(),
+            },
+        }
+    }
+}
 
 /**
  * Returns a demo "VM provision" saga
@@ -88,14 +110,14 @@ pub fn make_provision_saga() -> Arc<SagaTemplate> {
     Arc::new(w.build())
 }
 
-async fn demo_prov_instance_create(sgctx: SagaContext) -> SagaFuncResult<u64> {
+async fn demo_prov_instance_create(sgctx: SagaContext) -> ExFuncResult<u64> {
     eprintln!("running action: {}", sgctx.node_label());
     /* make up an instance ID */
     let instance_id = 1211u64;
     Ok(instance_id)
 }
 
-async fn demo_prov_vpc_alloc_ip(sgctx: SagaContext) -> SagaFuncResult<String> {
+async fn demo_prov_vpc_alloc_ip(sgctx: SagaContext) -> ExFuncResult<String> {
     eprintln!("running action: {}", sgctx.node_label());
     /* exercise using some data from a previous node */
     let instance_id = sgctx.lookup::<u64>("instance_id");
@@ -108,7 +130,7 @@ async fn demo_prov_vpc_alloc_ip(sgctx: SagaContext) -> SagaFuncResult<String> {
 /*
  * The next two steps are in a subsaga!
  */
-async fn demo_prov_server_alloc(sgctx: SagaContext) -> SagaFuncResult<u64> {
+async fn demo_prov_server_alloc(sgctx: SagaContext) -> ExFuncResult<u64> {
     eprintln!("running action: {}", sgctx.node_label());
 
     let mut w = SagaTemplateBuilder::new();
@@ -127,8 +149,10 @@ async fn demo_prov_server_alloc(sgctx: SagaContext) -> SagaFuncResult<u64> {
     let e = sgctx.child_saga(sg).await;
     e.run().await;
     let result = e.result();
-    let server_allocated: Arc<ServerAllocResult> =
-        result.lookup_output("server_reserve")?;
+    // XXX Propagate failure better
+    let server_allocated: Arc<ServerAllocResult> = result
+        .lookup_output("server_reserve")
+        .map_err(|_| ExampleError::AnError)?;
     Ok(server_allocated.server_id)
 }
 
@@ -137,7 +161,7 @@ struct ServerAllocResult {
     server_id: u64,
 }
 
-async fn demo_prov_server_pick(sgctx: SagaContext) -> SagaFuncResult<u64> {
+async fn demo_prov_server_pick(sgctx: SagaContext) -> ExFuncResult<u64> {
     eprintln!("running action: {}", sgctx.node_label());
     /* make up ("allocate") a new server id */
     let server_id = 1212u64;
@@ -146,7 +170,7 @@ async fn demo_prov_server_pick(sgctx: SagaContext) -> SagaFuncResult<u64> {
 
 async fn demo_prov_server_reserve(
     sgctx: SagaContext,
-) -> SagaFuncResult<ServerAllocResult> {
+) -> ExFuncResult<ServerAllocResult> {
     eprintln!("running action: {}", sgctx.node_label());
     /* exercise using data from previous nodes */
     let server_id = sgctx.lookup::<u64>("server_id");
@@ -155,7 +179,7 @@ async fn demo_prov_server_reserve(
     Ok(ServerAllocResult { server_id })
 }
 
-async fn demo_prov_volume_create(sgctx: SagaContext) -> SagaFuncResult<u64> {
+async fn demo_prov_volume_create(sgctx: SagaContext) -> ExFuncResult<u64> {
     eprintln!("running action: {}", sgctx.node_label());
     /* exercise using data from previous nodes */
     assert_eq!(sgctx.lookup::<u64>("instance_id"), 1211);
@@ -163,9 +187,7 @@ async fn demo_prov_volume_create(sgctx: SagaContext) -> SagaFuncResult<u64> {
     let volume_id = 1213u64;
     Ok(volume_id)
 }
-async fn demo_prov_instance_configure(
-    sgctx: SagaContext,
-) -> SagaFuncResult<()> {
+async fn demo_prov_instance_configure(sgctx: SagaContext) -> ExFuncResult<()> {
     eprintln!("running action: {}", sgctx.node_label());
     /* exercise using data from previous nodes */
     assert_eq!(sgctx.lookup::<u64>("instance_id"), 1211);
@@ -173,7 +195,7 @@ async fn demo_prov_instance_configure(
     assert_eq!(sgctx.lookup::<u64>("volume_id"), 1213);
     Ok(())
 }
-async fn demo_prov_volume_attach(sgctx: SagaContext) -> SagaFuncResult<()> {
+async fn demo_prov_volume_attach(sgctx: SagaContext) -> ExFuncResult<()> {
     eprintln!("running action: {}", sgctx.node_label());
     /* exercise using data from previous nodes */
     assert_eq!(sgctx.lookup::<u64>("instance_id"), 1211);
@@ -181,7 +203,7 @@ async fn demo_prov_volume_attach(sgctx: SagaContext) -> SagaFuncResult<()> {
     assert_eq!(sgctx.lookup::<u64>("volume_id"), 1213);
     Ok(())
 }
-async fn demo_prov_instance_boot(sgctx: SagaContext) -> SagaFuncResult<()> {
+async fn demo_prov_instance_boot(sgctx: SagaContext) -> ExFuncResult<()> {
     eprintln!("running action: {}", sgctx.node_label());
     /* exercise using data from previous nodes */
     assert_eq!(sgctx.lookup::<u64>("instance_id"), 1211);
@@ -190,7 +212,7 @@ async fn demo_prov_instance_boot(sgctx: SagaContext) -> SagaFuncResult<()> {
     Ok(())
 }
 
-async fn demo_prov_print(sgctx: SagaContext) -> SagaFuncResult<()> {
+async fn demo_prov_print(sgctx: SagaContext) -> ExFuncResult<()> {
     eprintln!("running action: {}", sgctx.node_label());
     eprintln!("printing final state:");
     let instance_id = sgctx.lookup::<u64>("instance_id");
