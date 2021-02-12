@@ -27,6 +27,15 @@ mod saga_exec;
 mod saga_log;
 mod saga_template;
 
+/*
+ * TODO-design TODO-correctness TODO-robustness In a lot of places, we've
+ * assumed that the caller should always know what type a node output or error
+ * is, and that's fine -- except for the fact that this might be coming in off
+ * the wire and something else may have corrupted it.  Maybe we should treat
+ * these as explicit operational errors that always bubble up and cause
+ * execution of the saga to fail with a generic-type error.
+ */
+
 pub use example_provision::make_provision_saga;
 pub use saga_action::new_action_noop_undo;
 pub use saga_action::SagaActionError;
