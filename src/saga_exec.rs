@@ -372,7 +372,7 @@ impl SagaExecutor {
         saga_template: Arc<SagaTemplate>,
         sglog: SagaLog,
         creator: &str,
-    ) -> Result<SagaExecutor, SagaError> {
+    ) -> Result<SagaExecutor, anyhow::Error> {
         /*
          * During recovery, there's a fine line between operational errors and
          * programmer errors.  If we discover semantically invalid saga state,
