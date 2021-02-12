@@ -1046,15 +1046,12 @@ impl SagaExecutor {
                 .contains_key(&self.saga_template.end_node));
 
             /*
-             * XXX There can be multiple errors in the saga (though it's not
-             * super likely, since it would require multiple
-             * concurrently-running actions to fail).  We documented elsewhere
-             * that we're going to select the error that caused the saga to
-             * fail.  Unfortunately, we don't currently record that and it's not
-             * super easy to do so, since we currently don't assume any ordering
-             * of the saga log.  Choosing the first one in the node_errors set
-             * will find the topologically-first one...which _might_ be right,
-             * but isn't necessarily.
+             * Choosing the first node_id in node_errors will find the
+             * topologically-first node that failed.  This may not be the one
+             * that actually triggered the saga to fail, but it could have done
+             * so.  (That is, if there were another action that failed that
+             * triggered the saga to fail, this one did not depend on it, so it
+             * could as well have happened in the other order.)
              */
             let (error_node_id, error_source) =
                 live_state.node_errors.iter().next().unwrap();
@@ -1385,11 +1382,14 @@ impl SagaExecResultOk {
 }
 
 /**
- * Provides access to failure details for a saga that failed.  When a
- * saga fails, it's always one action's failure triggers failure of the
- * saga.  It's possible that other actions also failed, but only if they
- * were running concurrently.  Their failures did not cause the saga to
- * fail, and information about them is not preserved here.
+ * Provides access to failure details for a saga that failed.  An arbitrary
+ * error from the saga is represented here.
+ *
+ * When a saga fails, it's always one action's failure triggers failure of the
+ * saga.  It's possible that other actions also failed, but only if they were
+ * running concurrently.  This structure represents any of these errors, which
+ * all could have caused the saga to fail, depending on the order in which they
+ * completed.
  */
 /*
  * TODO-coverage We should test that sagas do the right thing when two actions

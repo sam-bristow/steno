@@ -58,9 +58,9 @@ impl SagaActionUserError {
 // TODO-cleanup can we drop this Arc?
 pub type SagaActionResult = Result<Arc<JsonValue>, SagaActionError>;
 /** Result of a saga undo action */
-// XXX what should the error type here be?  Maybe something that can encompass
-// "general framework error"?  This might put the saga into a "needs attention"
-// state?
+// TODO-design what should the error type here be?  Maybe something that can
+// encompass "general framework error"?  This might put the saga into a "needs
+// attention" state?
 pub type SagaUndoResult = Result<(), anyhow::Error>;
 
 /**
