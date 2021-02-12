@@ -91,8 +91,8 @@ pub enum SagaNodeLoadStatus {
     Succeeded(Arc<JsonValue>),
     /** The action failed */
     Failed(SagaActionError),
-    /** The undo action has started running */
-    UndoStarted,
+    /** The undo action has started running (with output data from success) */
+    UndoStarted(Arc<JsonValue>),
     /** The undo action has finished */
     UndoFinished,
 }
@@ -115,14 +115,11 @@ impl SagaNodeLoadStatus {
                 Ok(SagaNodeLoadStatus::Failed(e.clone()))
             }
             (
-                SagaNodeLoadStatus::Succeeded(_),
+                SagaNodeLoadStatus::Succeeded(out),
                 SagaNodeEventType::UndoStarted,
-            ) => Ok(SagaNodeLoadStatus::UndoStarted),
-            (SagaNodeLoadStatus::Failed(_), SagaNodeEventType::UndoStarted) => {
-                Ok(SagaNodeLoadStatus::UndoStarted)
-            }
+            ) => Ok(SagaNodeLoadStatus::UndoStarted(Arc::clone(out))),
             (
-                SagaNodeLoadStatus::UndoStarted,
+                SagaNodeLoadStatus::UndoStarted(_),
                 SagaNodeEventType::UndoFinished,
             ) => Ok(SagaNodeLoadStatus::UndoFinished),
             _ => Err(SagaLogError::IllegalEventForState {
@@ -226,7 +223,7 @@ impl SagaLog {
 
         match next_status {
             SagaNodeLoadStatus::Failed(_)
-            | SagaNodeLoadStatus::UndoStarted
+            | SagaNodeLoadStatus::UndoStarted(_)
             | SagaNodeLoadStatus::UndoFinished => {
                 self.unwinding = true;
             }
@@ -331,12 +328,13 @@ impl SagaLog {
     }
 }
 
+#[doc(hidden)]
 #[derive(Deserialize, Serialize)]
-struct SagaLogSerialized {
+pub struct SagaLogSerialized {
     /* TODO-robustness add version */
-    saga_id: SagaId,
-    creator: String,
-    events: Vec<SagaNodeEvent>,
+    pub saga_id: SagaId,
+    pub creator: String,
+    pub events: Vec<SagaNodeEvent>,
 }
 
 impl fmt::Debug for SagaLog {

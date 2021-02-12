@@ -391,7 +391,7 @@ impl SagaExecutor {
             exec_state: if forward {
                 SagaState::Running
             } else {
-                SagaState::Done
+                SagaState::Unwinding
             },
             queue_todo: Vec::new(),
             queue_undo: Vec::new(),
@@ -552,13 +552,22 @@ impl SagaExecutor {
                             .insert(node_id, SagaUndoMode::ActionFailed);
                     }
                 }
-                SagaNodeLoadStatus::UndoStarted => {
+                SagaNodeLoadStatus::UndoStarted(output) => {
                     /*
                      * We know we're unwinding. (Otherwise, we should have
                      * failed validation earlier.)  Execute the undo action.
                      */
                     assert!(!forward);
                     live_state.queue_undo.push(node_id);
+
+                    /*
+                     * We still need to record the output because it's available
+                     * to the undo action.
+                     */
+                    live_state
+                        .node_outputs
+                        .insert(node_id, Arc::clone(output))
+                        .expect_none("recovered node twice (undo case)");
                 }
                 SagaNodeLoadStatus::UndoFinished => {
                     /*
@@ -892,7 +901,7 @@ impl SagaExecutor {
                 SagaNodeLoadStatus::Started => (),
                 SagaNodeLoadStatus::Succeeded(_)
                 | SagaNodeLoadStatus::Failed(_)
-                | SagaNodeLoadStatus::UndoStarted
+                | SagaNodeLoadStatus::UndoStarted(_)
                 | SagaNodeLoadStatus::UndoFinished => {
                     panic!("starting node in bad state")
                 }
@@ -943,7 +952,7 @@ impl SagaExecutor {
                     )
                     .await;
                 }
-                SagaNodeLoadStatus::UndoStarted => (),
+                SagaNodeLoadStatus::UndoStarted(_) => (),
                 SagaNodeLoadStatus::NeverStarted
                 | SagaNodeLoadStatus::Started
                 | SagaNodeLoadStatus::Failed(_)
@@ -1286,21 +1295,22 @@ impl SagaExecLiveState {
             self.sglog.load_status_for_node(node_id.index() as u64);
         if let Some(undo_mode) = self.nodes_undone.get(node_id) {
             set.insert(SagaNodeExecState::Undone(*undo_mode));
-        } else if self.node_outputs.contains_key(node_id) {
-            set.insert(SagaNodeExecState::Done);
+        } else if self.queue_undo.contains(node_id) {
+            set.insert(SagaNodeExecState::QueuedToUndo);
         } else if let SagaNodeLoadStatus::Failed(_) = load_status {
             assert!(self.node_errors.contains_key(node_id));
             set.insert(SagaNodeExecState::Failed);
+        } else if self.node_outputs.contains_key(node_id) {
+            set.insert(SagaNodeExecState::Done);
         }
+
         if self.node_tasks.contains_key(node_id) {
             set.insert(SagaNodeExecState::TaskInProgress);
         }
         if self.queue_todo.contains(node_id) {
             set.insert(SagaNodeExecState::QueuedToRun);
         }
-        if self.queue_undo.contains(node_id) {
-            set.insert(SagaNodeExecState::QueuedToUndo);
-        }
+
         if set.is_empty() {
             if let SagaNodeLoadStatus::NeverStarted = load_status {
                 SagaNodeExecState::Blocked
@@ -1308,6 +1318,7 @@ impl SagaExecLiveState {
                 panic!("could not determine node state");
             }
         } else {
+            // eprintln!("dap: {:?}", set);
             assert_eq!(set.len(), 1);
             let the_state = set.into_iter().last().unwrap();
             the_state
@@ -1527,43 +1538,60 @@ fn recovery_validate_parent(
 ) -> bool {
     match child_status {
         /*
-         * If the child node has started, finished successfully, finished with
-         * an error, or even started undoing, the only allowed status for the
-         * parent node is "done".  The states prior to "done" are ruled out
-         * because we execute nodes in dependency order.  "failed" is ruled out
-         * because we do not execute nodes whose parents failed.  The undoing
-         * states are ruled out because we unwind in reverse-dependency order,
-         * so we cannot have started undoing the parent if the child node has
-         * not finished undoing.  (A subtle but important implementation
-         * detail is that we do not undo a node that has not started
-         * execution.  If we did, then the "undo started" load state could be
-         * associated with a parent that failed.)
+         * If the child node has started, finished successfully, or even started
+         * undoing, the only allowed status for the parent node is "done".  The
+         * states prior to "done" are ruled out because we execute nodes in
+         * dependency order.  "failed" is ruled out because we do not execute
+         * nodes whose parents failed.  The undoing states are ruled out because
+         * we unwind in reverse-dependency order, so we cannot have started
+         * undoing the parent if the child node has not finished undoing.  (A
+         * subtle but important implementation detail is that we do not undo a
+         * node that has not started execution.  If we did, then the "undo
+         * started" load state could be associated with a parent that failed.)
          */
         SagaNodeLoadStatus::Started
         | SagaNodeLoadStatus::Succeeded(_)
-        | SagaNodeLoadStatus::Failed(_)
-        | SagaNodeLoadStatus::UndoStarted => {
+        | SagaNodeLoadStatus::UndoStarted(_) => {
             matches!(parent_status, SagaNodeLoadStatus::Succeeded(_))
+        }
+
+        /*
+         * If the child node has failed, this looks just like the previous case,
+         * except that the parent node could be UndoStarted or UndoFinished.
+         * That's possible because we don't undo a failed node, so after undoing
+         * the parents, the log state would still show "failed".
+         */
+        SagaNodeLoadStatus::Failed(_) => {
+            matches!(
+                parent_status,
+                SagaNodeLoadStatus::Succeeded(_)
+                    | SagaNodeLoadStatus::UndoStarted(_)
+                    | SagaNodeLoadStatus::UndoFinished
+            )
         }
 
         /*
          * If we've finished undoing the child node, then the parent must be
          * either "done" or one of the undoing states.
          */
-        SagaNodeLoadStatus::UndoFinished => matches!(parent_status,
+        SagaNodeLoadStatus::UndoFinished => matches!(
+            parent_status,
             SagaNodeLoadStatus::Succeeded(_)
-            | SagaNodeLoadStatus::UndoStarted
-            | SagaNodeLoadStatus::UndoFinished),
+                | SagaNodeLoadStatus::UndoStarted(_)
+                | SagaNodeLoadStatus::UndoFinished
+        ),
 
         /*
          * If a node has never started, the only illegal states for a parent are
          * those associated with undoing, since the child must be undone first.
          */
-        SagaNodeLoadStatus::NeverStarted => matches!(parent_status,
+        SagaNodeLoadStatus::NeverStarted => matches!(
+            parent_status,
             SagaNodeLoadStatus::NeverStarted
-            | SagaNodeLoadStatus::Started
-            | SagaNodeLoadStatus::Succeeded(_)
-            | SagaNodeLoadStatus::Failed(_)),
+                | SagaNodeLoadStatus::Started
+                | SagaNodeLoadStatus::Succeeded(_)
+                | SagaNodeLoadStatus::Failed(_)
+        ),
     }
 }
 

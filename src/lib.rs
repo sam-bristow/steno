@@ -39,6 +39,7 @@ pub use saga_exec::SagaExecResult;
 pub use saga_exec::SagaExecStatus;
 pub use saga_exec::SagaExecutor;
 pub use saga_log::SagaLog;
+pub use saga_log::SagaLogSerialized;
 pub use saga_template::SagaId;
 pub use saga_template::SagaTemplate;
 pub use saga_template::SagaTemplateBuilder;

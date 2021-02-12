@@ -6,6 +6,7 @@
 use expectorate::assert_contents;
 use std::env::current_exe;
 use std::path::PathBuf;
+use steno::SagaLogSerialized;
 use subprocess::Exec;
 use subprocess::Redirection;
 
@@ -70,6 +71,72 @@ fn cmd_run_error() {
         "tests/test_smoke_run_error.out",
         &run_example("run_error", |exec| {
             exec.arg("run").arg("--inject-error=instance_boot")
+        }),
+    );
+}
+
+#[test]
+fn cmd_run_recover() {
+    /* Do a normal run and save the log so we can try recovering from it. */
+    let log = run_example("recover1", |exec| {
+        exec.arg("run").arg("--dump-to=/dev/stdout").arg("--quiet")
+    });
+
+    /* First, try recovery without having changed anything. */
+    let recovery_done = run_example("recover2", |exec| {
+        exec.arg("run").arg("--recover-from=/dev/stdin").stdin(log.as_str())
+    });
+    assert_contents("tests/test_smoke_run_recover_done.out", &recovery_done);
+
+    /* Now try lopping off the last handful of records so there's work to do. */
+    let mut log_parsed: SagaLogSerialized =
+        serde_json::from_str(&log).expect("failed to parse generated log");
+    log_parsed.events.truncate(
+        (log_parsed.events.len() - 5).clamp(0, log_parsed.events.len()),
+    );
+    let log_shortened = serde_json::to_string(&log_parsed).unwrap();
+    assert_contents(
+        "tests/test_smoke_run_recover_some.out",
+        &run_example("recover3", |exec| {
+            exec.arg("run")
+                .arg("--recover-from=/dev/stdin")
+                .stdin(log_shortened.as_str())
+        }),
+    );
+}
+
+#[test]
+fn cmd_run_recover_unwind() {
+    /* Do a failed run and save the log so we can try recovering from it. */
+    let log = run_example("recover_fail1", |exec| {
+        exec.arg("run")
+            .arg("--dump-to=/dev/stdout")
+            .arg("--quiet")
+            .arg("--inject-error=instance_boot")
+    });
+
+    /* First, try recovery without having changed anything. */
+    let recovery_done = run_example("recover_fail2", |exec| {
+        exec.arg("run").arg("--recover-from=/dev/stdin").stdin(log.as_str())
+    });
+    assert_contents(
+        "tests/test_smoke_run_recover_fail_done.out",
+        &recovery_done,
+    );
+
+    /* Now try lopping off the last handful of records so there's work to do. */
+    let mut log_parsed: SagaLogSerialized =
+        serde_json::from_str(&log).expect("failed to parse generated log");
+    log_parsed.events.truncate(
+        (log_parsed.events.len() - 3).clamp(0, log_parsed.events.len()),
+    );
+    let log_shortened = serde_json::to_string(&log_parsed).unwrap();
+    assert_contents(
+        "tests/test_smoke_run_recover_fail_some.out",
+        &run_example("recover_fail3", |exec| {
+            exec.arg("run")
+                .arg("--recover-from=/dev/stdin")
+                .stdin(log_shortened.as_str())
         }),
     );
 }

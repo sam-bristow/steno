@@ -115,6 +115,10 @@ struct RunArgs {
     #[structopt(long)]
     inject_error: Vec<String>,
 
+    /// do not print to stdout
+    #[structopt(long)]
+    quiet: bool,
+
     /// upon completion, dump the workflog log to the named file
     #[structopt(long)]
     dump_to: Option<PathBuf>,
@@ -131,7 +135,9 @@ struct RunArgs {
 async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
     let saga_template = make_provision_saga();
     let exec = if let Some(input_log_path) = &args.recover_from {
-        println!("recovering from log: {}", input_log_path.display());
+        if !args.quiet {
+            println!("recovering from log: {}", input_log_path.display());
+        }
 
         let file = fs::File::open(&input_log_path).with_context(|| {
             format!("open recovery log \"{}\"", input_log_path.display())
@@ -148,9 +154,11 @@ async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
             format!("recover log \"{}\"", input_log_path.display())
         })?;
 
-        print!("recovered state\n");
-        println!("{}", exec.status().await);
-        println!("");
+        if !args.quiet {
+            print!("recovered state\n");
+            println!("{}", exec.status().await);
+            println!("");
+        }
         exec
     } else {
         SagaExecutor::new(
@@ -166,22 +174,26 @@ async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
                 format!("bad argument for --inject-error: {:?}", node_name)
             })?;
         exec.inject_error(node_id).await;
-        println!("will inject error at node \"{}\"", node_name);
+        if !args.quiet {
+            println!("will inject error at node \"{}\"", node_name);
+        }
     }
 
-    println!("*** running saga ***");
+    if !args.quiet {
+        println!("*** running saga ***");
+    }
     exec.run().await;
-    println!("*** finished saga ***");
-
-    println!("\n*** final state ***");
-    println!("{}", exec.status().await);
+    if !args.quiet {
+        println!("*** finished saga ***");
+        println!("\n*** final state ***");
+        println!("{}", exec.status().await);
+    }
 
     if let Some(output_log_path) = &args.dump_to {
         let result = exec.result();
         let log = result.saga_log;
         let out = fs::OpenOptions::new()
             .write(true)
-            .create_new(true)
             .open(output_log_path)
             .with_context(|| {
                 format!("open output log \"{}\"", output_log_path.display())
@@ -189,7 +201,9 @@ async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
         log.dump(out).with_context(|| {
             format!("save output log \"{}\"", output_log_path.display())
         })?;
-        println!("dumped log to \"{}\"", output_log_path.display());
+        if !args.quiet {
+            println!("dumped log to \"{}\"", output_log_path.display());
+        }
     }
 
     Ok(())
