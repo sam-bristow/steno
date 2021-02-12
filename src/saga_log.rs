@@ -186,9 +186,9 @@ pub struct SagaLog {
 }
 
 impl SagaLog {
-    pub fn new(creator: &str, saga_id: SagaId) -> SagaLog {
+    pub fn new(creator: &str, saga_id: &SagaId) -> SagaLog {
         SagaLog {
-            saga_id,
+            saga_id: *saga_id,
             creator: creator.to_string(),
             events: Vec::new(),
             node_status: BTreeMap::new(),
@@ -280,7 +280,7 @@ impl SagaLog {
     ) -> Result<SagaLog, anyhow::Error> {
         let mut s: SagaLogSerialized = serde_json::from_reader(reader)
             .with_context(|| "deserializing saga log")?;
-        let mut sglog = SagaLog::new(&creator, s.saga_id);
+        let mut sglog = SagaLog::new(&creator, &s.saga_id);
 
         /*
          * Sort the events by the event type.  This ensures that if there's at

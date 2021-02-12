@@ -32,7 +32,6 @@ use std::fmt;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 
 /*
  * TODO-design Should we go even further and say that each node is its own
@@ -358,10 +357,10 @@ enum RecoveryDirection {
 impl SagaExecutor {
     /** Create an executor to run the given saga. */
     pub fn new(
+        saga_id: &SagaId,
         saga_template: Arc<SagaTemplate>,
         creator: &str,
     ) -> SagaExecutor {
-        let saga_id = SagaId(Uuid::new_v4());
         let sglog = SagaLog::new(creator, saga_id);
         SagaExecutor::new_recover(saga_template, sglog, creator).unwrap()
     }
@@ -1629,8 +1628,12 @@ impl SagaContext {
      * TODO We probably need to ensure that the child saga is running in the
      * same SEC.
      */
-    pub async fn child_saga(&self, sg: Arc<SagaTemplate>) -> Arc<SagaExecutor> {
-        let e = Arc::new(SagaExecutor::new(sg, &self.creator));
+    pub async fn child_saga(
+        &self,
+        saga_id: &SagaId,
+        sg: Arc<SagaTemplate>,
+    ) -> Arc<SagaExecutor> {
+        let e = Arc::new(SagaExecutor::new(saga_id, sg, &self.creator));
         /* TODO-correctness Prove the lock ordering is okay here .*/
         self.live_state
             .lock()

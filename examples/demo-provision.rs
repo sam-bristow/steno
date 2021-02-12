@@ -8,8 +8,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use steno::make_provision_saga;
 use steno::SagaExecutor;
+use steno::SagaId;
 use steno::SagaLog;
 use structopt::StructOpt;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -47,6 +49,14 @@ enum Demo {
 }
 
 /*
+ * We use a hardcoded SagaId for ease of automated testing. See the note in
+ * demo_prov_server_alloc().
+ */
+fn make_saga_id() -> SagaId {
+    SagaId(Uuid::parse_str("049b2522-308d-442e-bc65-9bfaef863597").unwrap())
+}
+
+/*
  * "dot" subcommand
  */
 
@@ -62,13 +72,14 @@ async fn cmd_dot() -> Result<(), anyhow::Error> {
 
 async fn cmd_info() -> Result<(), anyhow::Error> {
     let saga_template = make_provision_saga();
-    eprintln!("*** saga template definition ***");
-    eprintln!("saga template graph: ");
-    eprintln!("{}", saga_template.dot());
+    println!("*** saga template definition ***");
+    println!("saga template graph: ");
+    println!("{}", saga_template.dot());
 
-    eprintln!("*** initial state ***");
-    let exec = SagaExecutor::new(saga_template, "provision-info");
-    eprintln!("{}", exec.status().await);
+    println!("*** initial state ***");
+    let exec =
+        SagaExecutor::new(&make_saga_id(), saga_template, "provision-info");
+    println!("{}", exec.status().await);
     Ok(())
 }
 
@@ -90,7 +101,7 @@ async fn cmd_print_log(args: &PrintLogArgs) -> Result<(), anyhow::Error> {
     let sglog = SagaLog::load("unused", file).with_context(|| {
         format!("load log \"{}\"", input_log_path.display())
     })?;
-    eprintln!("{:?}", sglog);
+    println!("{:?}", sglog);
     Ok(())
 }
 
@@ -120,7 +131,7 @@ struct RunArgs {
 async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
     let saga_template = make_provision_saga();
     let exec = if let Some(input_log_path) = &args.recover_from {
-        eprintln!("recovering from log: {}", input_log_path.display());
+        println!("recovering from log: {}", input_log_path.display());
 
         let file = fs::File::open(&input_log_path).with_context(|| {
             format!("open recovery log \"{}\"", input_log_path.display())
@@ -137,12 +148,16 @@ async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
             format!("recover log \"{}\"", input_log_path.display())
         })?;
 
-        eprint!("recovered state\n");
-        eprintln!("{}", exec.status().await);
-        eprintln!("");
+        print!("recovered state\n");
+        println!("{}", exec.status().await);
+        println!("");
         exec
     } else {
-        SagaExecutor::new(Arc::clone(&saga_template), &args.creator)
+        SagaExecutor::new(
+            &make_saga_id(),
+            Arc::clone(&saga_template),
+            &args.creator,
+        )
     };
 
     for node_name in &args.inject_error {
@@ -151,15 +166,15 @@ async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
                 format!("bad argument for --inject-error: {:?}", node_name)
             })?;
         exec.inject_error(node_id).await;
-        eprintln!("will inject error at node \"{}\"", node_name);
+        println!("will inject error at node \"{}\"", node_name);
     }
 
-    eprintln!("*** running saga ***");
+    println!("*** running saga ***");
     exec.run().await;
-    eprintln!("*** finished saga ***");
+    println!("*** finished saga ***");
 
-    eprintln!("\n*** final state ***");
-    eprintln!("{}", exec.status().await);
+    println!("\n*** final state ***");
+    println!("{}", exec.status().await);
 
     if let Some(output_log_path) = &args.dump_to {
         let result = exec.result();
@@ -174,7 +189,7 @@ async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
         log.dump(out).with_context(|| {
             format!("save output log \"{}\"", output_log_path.display())
         })?;
-        eprintln!("dumped log to \"{}\"", output_log_path.display());
+        println!("dumped log to \"{}\"", output_log_path.display());
     }
 
     Ok(())

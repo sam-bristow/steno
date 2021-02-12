@@ -6,12 +6,14 @@ use crate::new_action_noop_undo;
 use crate::SagaActionError;
 use crate::SagaContext;
 use crate::SagaFuncResult;
+use crate::SagaId;
 use crate::SagaTemplate;
 use crate::SagaTemplateBuilder;
 use serde::Deserialize;
 use serde::Serialize;
 use std::sync::Arc;
 use thiserror::Error;
+use uuid::Uuid;
 
 /*
  * Demo provision saga:
@@ -141,7 +143,16 @@ async fn demo_prov_server_alloc(sgctx: SagaContext) -> ExFuncResult<u64> {
     );
     let sg = Arc::new(w.build());
 
-    let e = sgctx.child_saga(sg).await;
+    /*
+     * The uuid here is deterministic solely for the smoke tests.  It would
+     * probably be better to have a way to get uuids from the SagaContext, and
+     * have a mode where those come from a seeded random number generator (or
+     * some other controlled source for testing).
+     */
+    let saga_id = SagaId(
+        Uuid::parse_str("bcf32552-2b54-485b-bf13-b316daa7d1d4").unwrap(),
+    );
+    let e = sgctx.child_saga(&saga_id, sg).await;
     e.run().await;
     match e.result().kind {
         Ok(success) => {
