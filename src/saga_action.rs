@@ -18,7 +18,7 @@ use thiserror::Error;
  * Result, output, and error types used for actions
  */
 
-#[derive(Debug, Deserialize, Error, Serialize)]
+#[derive(Clone, Debug, Deserialize, Error, Serialize)]
 pub enum SagaActionError {
     #[error("action failed")]
     ActionFailed { source_error: JsonValue },

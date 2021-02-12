@@ -1,5 +1,6 @@
 //! Persistent state for sagas
 
+use crate::saga_action::SagaActionError;
 use crate::saga_template::SagaId;
 use anyhow::anyhow;
 use anyhow::Context;
@@ -49,7 +50,7 @@ pub enum SagaNodeEventType {
     /** The action completed successfully (with output data) */
     Succeeded(Arc<JsonValue>),
     /** The action failed */
-    Failed(Arc<JsonValue>),
+    Failed(SagaActionError),
     /** The undo action has started running */
     UndoStarted,
     /** The undo action has finished */
@@ -89,7 +90,7 @@ pub enum SagaNodeLoadStatus {
     /** The action completed successfully (with output data) */
     Succeeded(Arc<JsonValue>),
     /** The action failed */
-    Failed,
+    Failed(SagaActionError),
     /** The undo action has started running */
     UndoStarted,
     /** The undo action has finished */
@@ -110,14 +111,14 @@ impl SagaNodeLoadStatus {
                 SagaNodeLoadStatus::Started,
                 SagaNodeEventType::Succeeded(out),
             ) => Ok(SagaNodeLoadStatus::Succeeded(Arc::clone(out))),
-            (SagaNodeLoadStatus::Started, SagaNodeEventType::Failed(_)) => {
-                Ok(SagaNodeLoadStatus::Failed)
+            (SagaNodeLoadStatus::Started, SagaNodeEventType::Failed(e)) => {
+                Ok(SagaNodeLoadStatus::Failed(e.clone()))
             }
             (
                 SagaNodeLoadStatus::Succeeded(_),
                 SagaNodeEventType::UndoStarted,
             ) => Ok(SagaNodeLoadStatus::UndoStarted),
-            (SagaNodeLoadStatus::Failed, SagaNodeEventType::UndoStarted) => {
+            (SagaNodeLoadStatus::Failed(_), SagaNodeEventType::UndoStarted) => {
                 Ok(SagaNodeLoadStatus::UndoStarted)
             }
             (
@@ -224,7 +225,7 @@ impl SagaLog {
         let next_status = current_status.next_status(&event.event_type)?;
 
         match next_status {
-            SagaNodeLoadStatus::Failed
+            SagaNodeLoadStatus::Failed(_)
             | SagaNodeLoadStatus::UndoStarted
             | SagaNodeLoadStatus::UndoFinished => {
                 self.unwinding = true;

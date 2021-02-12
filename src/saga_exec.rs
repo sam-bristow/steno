@@ -75,6 +75,7 @@ impl SagaNodeRest for SagaNode<SgnsDone> {
         live_state: &mut SagaExecLiveState,
     ) {
         let graph = &exec.saga_template.graph;
+        assert!(!live_state.node_errors.contains_key(&self.node_id));
         live_state
             .node_outputs
             .insert(self.node_id, Arc::clone(&self.state.0))
@@ -121,9 +122,7 @@ impl SagaNodeRest for SagaNode<SgnsDone> {
 
 impl SagaNodeRest for SagaNode<SgnsFailed> {
     fn log_event(&self) -> SagaNodeEventType {
-        // XXX error case
-        let serialized = serde_json::to_value(&self.state.0).unwrap();
-        SagaNodeEventType::Failed(Arc::new(serialized))
+        SagaNodeEventType::Failed(self.state.0.clone())
     }
 
     fn propagate(
@@ -132,6 +131,11 @@ impl SagaNodeRest for SagaNode<SgnsFailed> {
         live_state: &mut SagaExecLiveState,
     ) {
         let graph = &exec.saga_template.graph;
+        assert!(!live_state.node_outputs.contains_key(&self.node_id));
+        live_state
+            .node_errors
+            .insert(self.node_id, self.state.0.clone())
+            .expect_none("node finished twice (storing error)");
 
         if live_state.exec_state == SagaState::Unwinding {
             /*
@@ -395,6 +399,7 @@ impl SagaExecutor {
             node_tasks: BTreeMap::new(),
             node_outputs: BTreeMap::new(),
             nodes_undone: BTreeMap::new(),
+            node_errors: BTreeMap::new(),
             child_sagas: BTreeMap::new(),
             sglog: sglog,
             injected_errors: BTreeSet::new(),
@@ -520,6 +525,7 @@ impl SagaExecutor {
                      * all finished undoing, then it's time to undo this
                      * one.
                      */
+                    assert!(!live_state.node_errors.contains_key(&node_id));
                     live_state
                         .node_outputs
                         .insert(node_id, Arc::clone(output))
@@ -528,7 +534,13 @@ impl SagaExecutor {
                         live_state.queue_undo.push(node_id);
                     }
                 }
-                SagaNodeLoadStatus::Failed => {
+                SagaNodeLoadStatus::Failed(error) => {
+                    assert!(!live_state.node_outputs.contains_key(&node_id));
+                    live_state
+                        .node_errors
+                        .insert(node_id, error.clone())
+                        .expect_none("recovered node twice (failure case)");
+
                     /*
                      * If the node failed, and we're unwinding, and the children
                      * have all been undone, it's time to undo this one.
@@ -880,7 +892,7 @@ impl SagaExecutor {
                 }
                 SagaNodeLoadStatus::Started => (),
                 SagaNodeLoadStatus::Succeeded(_)
-                | SagaNodeLoadStatus::Failed
+                | SagaNodeLoadStatus::Failed(_)
                 | SagaNodeLoadStatus::UndoStarted
                 | SagaNodeLoadStatus::UndoFinished => {
                     panic!("starting node in bad state")
@@ -935,7 +947,7 @@ impl SagaExecutor {
                 SagaNodeLoadStatus::UndoStarted => (),
                 SagaNodeLoadStatus::NeverStarted
                 | SagaNodeLoadStatus::Started
-                | SagaNodeLoadStatus::Failed
+                | SagaNodeLoadStatus::Failed(_)
                 | SagaNodeLoadStatus::UndoFinished => {
                     panic!("undoing node in bad state")
                 }
@@ -1032,12 +1044,28 @@ impl SagaExecutor {
             assert!(live_state
                 .nodes_undone
                 .contains_key(&self.saga_template.end_node));
+
+            /*
+             * XXX There can be multiple errors in the saga (though it's not
+             * super likely, since it would require multiple
+             * concurrently-running actions to fail).  We documented elsewhere
+             * that we're going to select the error that caused the saga to
+             * fail.  Unfortunately, we don't currently record that and it's not
+             * super easy to do so, since we currently don't assume any ordering
+             * of the saga log.  Choosing the first one in the node_errors set
+             * will find the topologically-first one...which _might_ be right,
+             * but isn't necessarily.
+             */
+            let (error_node_id, error_source) =
+                live_state.node_errors.iter().next().unwrap();
+            let error_node_name =
+                self.saga_template.node_names[error_node_id].clone();
             return SagaExecResult {
                 saga_id: self.saga_id,
                 saga_log: live_state.sglog.clone(),
                 kind: Err(SagaExecResultErr {
-                    error_node_name: todo!("fill in"), // XXX
-                    error_source: todo!("fill in"),    // XXX
+                    error_node_name,
+                    error_source: error_source.clone(),
                 }),
             };
         }
@@ -1190,10 +1218,11 @@ struct SagaExecLiveState {
     node_tasks: BTreeMap<NodeIndex, JoinHandle<()>>,
 
     /** Outputs saved by completed actions. */
-    // TODO may as well store errors too
     node_outputs: BTreeMap<NodeIndex, Arc<JsonValue>>,
     /** Set of undone nodes. */
     nodes_undone: BTreeMap<NodeIndex, SagaUndoMode>,
+    /** Errors produced by failed actions. */
+    node_errors: BTreeMap<NodeIndex, SagaActionError>,
 
     /** Child sagas created by a node (for status and control) */
     child_sagas: BTreeMap<NodeIndex, Vec<Arc<SagaExecutor>>>,
@@ -1263,7 +1292,8 @@ impl SagaExecLiveState {
             set.insert(SagaNodeExecState::Undone(*undo_mode));
         } else if self.node_outputs.contains_key(node_id) {
             set.insert(SagaNodeExecState::Done);
-        } else if let SagaNodeLoadStatus::Failed = load_status {
+        } else if let SagaNodeLoadStatus::Failed(_) = load_status {
+            assert!(self.node_errors.contains_key(node_id));
             set.insert(SagaNodeExecState::Failed);
         }
         if self.node_tasks.contains_key(node_id) {
@@ -1512,7 +1542,7 @@ fn recovery_validate_parent(
          */
         SagaNodeLoadStatus::Started
         | SagaNodeLoadStatus::Succeeded(_)
-        | SagaNodeLoadStatus::Failed
+        | SagaNodeLoadStatus::Failed(_)
         | SagaNodeLoadStatus::UndoStarted => {
             matches!(parent_status, SagaNodeLoadStatus::Succeeded(_))
         }
@@ -1534,7 +1564,7 @@ fn recovery_validate_parent(
             SagaNodeLoadStatus::NeverStarted
             | SagaNodeLoadStatus::Started
             | SagaNodeLoadStatus::Succeeded(_)
-            | SagaNodeLoadStatus::Failed),
+            | SagaNodeLoadStatus::Failed(_)),
     }
 }
 
