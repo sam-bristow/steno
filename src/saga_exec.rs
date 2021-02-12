@@ -1318,7 +1318,6 @@ impl SagaExecLiveState {
                 panic!("could not determine node state");
             }
         } else {
-            // eprintln!("dap: {:?}", set);
             assert_eq!(set.len(), 1);
             let the_state = set.into_iter().last().unwrap();
             the_state

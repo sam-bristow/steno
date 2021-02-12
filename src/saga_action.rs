@@ -18,6 +18,46 @@ use thiserror::Error;
  * Result, output, and error types used for actions
  */
 
+/*
+ * Error types
+ * TODO This needs more thought and better documentation, particularly on why
+ * this works this way.
+ *
+ * Here's the basic idea: a user-provided saga action can fail for a number of
+ * reasons and the returned error should provide enough information for a
+ * consumer of the saga to understand what happened.  That is, if the
+ * user-provided action failed for a specific reason, and that causes the whole
+ * saga to fail, then someone waiting on the result of the saga should know what
+ * that specific reason was.  This means we want the user-provided saga action
+ * to be able to return a user-provided error type.
+ *
+ * It's also possible for the saga action to fail due to a problem in the
+ * framework.  For example, if an error was injected, the action won't be run at
+ * all, and we don't have a user-provided error type to put in its place.  Or
+ * maybe the user action succeeded, but we failed to serialize the output.  In
+ * these cases, the framework itself needs to return an error.
+ *
+ * How can we return either a framework error or a user error?  We provide
+ * `SagaActionError`, an enum describing the ways a saga action can fail.  One
+ * of those variants, `ActionFailed`, indicates that we ran the action and _it_
+ * returned a user-provided error.  Just like with normal outputs, we require
+ * that error objects be serializable and we store the generic JsonValue
+ * serialized form.  Later, if the user wants the specific error back, we
+ * deserialize it.  This is important to ensure that this sequence (generate
+ * user-specific error, then later access it) works even when there's a crash in
+ * the middle of it.
+ *
+ * Recall that the interface for SagaAction is more generic than for
+ * SagaActionFunc.  SagaAction actions produce a Result that's ultimately either
+ * a JsonValue representing an output or a JsonValue representing an error.
+ * SagaActionFunc allows consumers to produce Result<O, E>, where `O` and `E`
+ * both impl `SagaActionOutput` (which essentially means that they're serde
+ * serializable, deserializable, Send, and Sync).
+ */
+
+/**
+ * An error that can be produced by a saga action
+ */
 #[derive(Clone, Debug, Deserialize, Error, Serialize)]
 pub enum SagaActionError {
     #[error("action failed")]
@@ -29,6 +69,10 @@ pub enum SagaActionError {
 }
 
 impl SagaActionError {
+    /**
+     * Return a SagaActionError for a given user-provided serializable error
+     * type
+     */
     pub fn action_failed<E: SagaActionOutput + 'static>(
         user_error: E,
     ) -> SagaActionError {
@@ -43,10 +87,18 @@ impl SagaActionError {
     }
 }
 
+/**
+ * Wrapper around SagaActionError::ActionFailed to ensure that downcasting is
+ * only possible for the ActionFailed variant.
+ */
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SagaActionUserError(JsonValue);
 
 impl SagaActionUserError {
+    /**
+     * Reinterpret the SagaActionError::ActionFailed source error as an object
+     * of type `T`.
+     */
     pub fn action_failure_downcast<T: SagaActionOutput + 'static>(&self) -> T {
         serde_json::from_value(self.0.clone()).expect(
             "failed to deserialize action failure error as requested type",
