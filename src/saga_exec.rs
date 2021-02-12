@@ -5,8 +5,6 @@ use crate::saga_action::SagaAction;
 use crate::saga_action::SagaActionError;
 use crate::saga_action::SagaActionInjectError;
 use crate::saga_action::SagaActionOutput;
-use crate::saga_action::SagaActionResult;
-use crate::saga_action::SagaError;
 use crate::saga_log::SagaNodeEventType;
 use crate::saga_log::SagaNodeLoadStatus;
 use crate::saga_template::SagaId;
@@ -1029,15 +1027,6 @@ impl SagaExecutor {
             .expect("attempted to get result while saga still running?");
         assert_eq!(live_state.exec_state, SagaState::Done);
 
-        /*
-         * We don't allow callers to access outputs from a saga that failed
-         * because it's not obvious yet why this would be useful and it's too
-         * easy to shoot yourself in the foot by not checking whether the saga
-         * failed.  If this becomes useful, we could expose it in a way that
-         * makes sure callers have checked this.
-         * TODO-cleanup If we make SagaExecResult an enum of success or failure,
-         * that alone might help.
-         */
         if live_state.nodes_undone.contains_key(&self.saga_template.start_node)
         {
             assert!(live_state
@@ -1045,30 +1034,34 @@ impl SagaExecutor {
                 .contains_key(&self.saga_template.end_node));
             return SagaExecResult {
                 saga_id: self.saga_id,
-                sglog: live_state.sglog.clone(),
-                node_results: BTreeMap::new(),
-                succeeded: false,
+                saga_log: live_state.sglog.clone(),
+                kind: Err(SagaExecResultErr {
+                    error_node_name: todo!("fill in"), // XXX
+                    error_source: todo!("fill in"),    // XXX
+                }),
             };
         }
 
         assert!(live_state.nodes_undone.is_empty());
-        let mut node_results = BTreeMap::new();
-        for (node_id, output) in &live_state.node_outputs {
-            if *node_id == self.saga_template.start_node
-                || *node_id == self.saga_template.end_node
-            {
-                continue;
-            }
-
-            let node_name = &self.saga_template.node_names[node_id];
-            node_results.insert(node_name.clone(), Ok(Arc::clone(output)));
-        }
+        let node_outputs = live_state
+            .node_outputs
+            .iter()
+            .filter_map(|(node_id, node_output)| {
+                let start_node = &self.saga_template.start_node;
+                let end_node = &self.saga_template.end_node;
+                if *node_id == *start_node || *node_id == *end_node {
+                    None
+                } else {
+                    let node_name = &self.saga_template.node_names[node_id];
+                    Some((node_name.clone(), Arc::clone(node_output)))
+                }
+            })
+            .collect();
 
         SagaExecResult {
             saga_id: self.saga_id,
-            sglog: live_state.sglog.clone(),
-            node_results,
-            succeeded: true,
+            saga_log: live_state.sglog.clone(),
+            kind: Ok(SagaExecResultOk { node_outputs }),
         }
     }
 
@@ -1327,15 +1320,17 @@ impl SagaExecLiveState {
  */
 pub struct SagaExecResult {
     pub saga_id: SagaId,
-    pub sglog: SagaLog,
-    node_results: BTreeMap<String, SagaActionResult>,
-    succeeded: bool,
+    pub saga_log: SagaLog,
+    pub kind: Result<SagaExecResultOk, SagaExecResultErr>,
 }
 
-impl SagaExecResult {
+pub struct SagaExecResultOk {
+    node_outputs: BTreeMap<String, Arc<JsonValue>>,
+}
+
+impl SagaExecResultOk {
     /**
-     * Returns the data produced by a node in the saga, if the saga completed
-     * successfully.  Otherwise, returns an error.
+     * Returns the data produced by a node in the saga.
      *
      * # Panics
      *
@@ -1345,32 +1340,45 @@ impl SagaExecResult {
     pub fn lookup_output<T: SagaActionOutput + 'static>(
         &self,
         name: &str,
-    ) -> Result<T, SagaError> {
-        if !self.succeeded {
-            return Err(anyhow!(
-                "fetch output \"{}\" from saga execution \
-                \"{}\": saga did not complete successfully",
+    ) -> T {
+        let output_json = self.node_outputs.get(name).unwrap_or_else(|| {
+            panic!("node with name \"{}\": not part of this saga", name)
+        });
+        // TODO-cleanup double-asterisk seems odd?
+        serde_json::from_value((**output_json).clone()).unwrap_or_else(|_| {
+            panic!(
+                "node with name \"{}\": requested wrong type for output",
                 name,
-                self.saga_id
-            ));
-        }
-
-        let result = self.node_results.get(name).expect(&format!(
-            "node with name \"{}\" is not part of this saga",
-            name
-        ));
-        let item = result.as_ref().expect(&format!(
-            "node with name \"{}\" failed and did not produce an output",
-            name
-        ));
-        // TODO-cleanup double-asterisk seems ridiculous
-        let parsed: T =
-            serde_json::from_value((**item).clone()).expect(&format!(
-                "requested wrong type for output of node with name \"{}\"",
-                name
-            ));
-        Ok(parsed)
+            )
+        })
     }
+}
+
+/**
+ * Provides access to failure details for a saga that failed.  When a
+ * saga fails, it's always one action's failure triggers failure of the
+ * saga.  It's possible that other actions also failed, but only if they
+ * were running concurrently.  Their failures did not cause the saga to
+ * fail, and information about them is not preserved here.
+ */
+/*
+ * TODO-coverage We should test that sagas do the right thing when two actions
+ * fail concurrently.
+ *
+ * We don't allow callers to access outputs from a saga that failed
+ * because it's not obvious yet why this would be useful and it's too
+ * easy to shoot yourself in the foot by not checking whether the saga
+ * failed.  In practice, the enum that wraps this type ensures that the caller
+ * has checked for failure, so it wouldn't be unreasonable to provide outputs
+ * here.  (A strong case: there are cases where it's useful to get outputs even
+ * while the saga is running, as might happen for a saga that generates a
+ * database record whose id you want to return to a client without waiting for
+ * the saga to complete.  It's silly to let you get this id while the saga is
+ * running, but not after it's failed.)
+ */
+pub struct SagaExecResultErr {
+    pub error_node_name: String,
+    pub error_source: SagaActionError,
 }
 
 /**

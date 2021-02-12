@@ -163,7 +163,7 @@ async fn cmd_run(args: &RunArgs) -> Result<(), anyhow::Error> {
 
     if let Some(output_log_path) = &args.dump_to {
         let result = exec.result();
-        let log = result.sglog;
+        let log = result.saga_log;
         let out = fs::OpenOptions::new()
             .write(true)
             .create_new(true)

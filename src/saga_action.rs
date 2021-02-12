@@ -18,10 +18,6 @@ use thiserror::Error;
  * Result, output, and error types used for actions
  */
 
-// XXX remove this?
-/** Error produced by a saga action or a saga itself */
-pub type SagaError = anyhow::Error;
-
 #[derive(Debug, Deserialize, Error, Serialize)]
 pub enum SagaActionError {
     #[error("action failed")]
@@ -32,11 +28,38 @@ pub enum SagaActionError {
     InjectedError,
 }
 
+impl SagaActionError {
+    /*
+     * XXX We could avoid the runtime failure by wrapping the source error in a
+     * newtype that provided this interface.
+     * XXX In a lot of places, we've assumed that the caller should always know
+     * what type a node output or error is, and that's fine -- except for the
+     * fact that this might be coming in off the wire and something else may
+     * have corrupted it.  Maybe we should treat these as explicit operational
+     * errors that always bubble up and cause execution of the saga to fail with
+     * a generic-type error.
+     */
+    pub fn action_failure_downcast<T: SagaActionOutput + 'static>(&self) -> T {
+        match self {
+            SagaActionError::ActionFailed { source_error } => {
+                serde_json::from_value(source_error.clone()).expect(
+                    "failed \
+                    to deserialize action failure error as requested type",
+                )
+            }
+            _ => panic!("wrong kind of SagaActionError"),
+        }
+    }
+}
+
 /** Result of a saga action */
 // TODO-cleanup can we drop this Arc?
 pub type SagaActionResult = Result<Arc<JsonValue>, SagaActionError>;
 /** Result of a saga undo action */
-pub type SagaUndoResult = Result<(), SagaError>;
+// XXX what should the error type here be?  Maybe something that can encompass
+// "general framework error"?  This might put the saga into a "needs attention"
+// state?
+pub type SagaUndoResult = Result<(), anyhow::Error>;
 
 /**
  * Result of a function that implements a saga action

@@ -148,12 +148,14 @@ async fn demo_prov_server_alloc(sgctx: SagaContext) -> ExFuncResult<u64> {
 
     let e = sgctx.child_saga(sg).await;
     e.run().await;
-    let result = e.result();
-    // XXX Propagate failure better
-    let server_allocated: Arc<ServerAllocResult> = result
-        .lookup_output("server_reserve")
-        .map_err(|_| ExampleError::AnError)?;
-    Ok(server_allocated.server_id)
+    match e.result().kind {
+        Ok(success) => {
+            let server_allocated: Arc<ServerAllocResult> =
+                success.lookup_output("server_reserve");
+            Ok(server_allocated.server_id)
+        }
+        Err(failure) => Err(failure.error_source),
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
