@@ -31,6 +31,7 @@ pub use example_provision::make_provision_saga;
 pub use saga_action::new_action_noop_undo;
 pub use saga_action::SagaActionError;
 pub use saga_action::SagaActionFunc;
+pub use saga_action::SagaActionUserError;
 pub use saga_action::SagaFuncResult;
 pub use saga_action::SagaUndoResult;
 pub use saga_exec::SagaContext;

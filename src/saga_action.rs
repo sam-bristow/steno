@@ -21,7 +21,7 @@ use thiserror::Error;
 #[derive(Clone, Debug, Deserialize, Error, Serialize)]
 pub enum SagaActionError {
     #[error("action failed")]
-    ActionFailed { source_error: JsonValue },
+    ActionFailed { source_error: SagaActionUserError },
     #[error("failed to serialize action's result")]
     SerializeFailed { message: String },
     #[error("error injected")]
@@ -29,26 +29,28 @@ pub enum SagaActionError {
 }
 
 impl SagaActionError {
-    /*
-     * XXX We could avoid the runtime failure by wrapping the source error in a
-     * newtype that provided this interface.
-     * XXX In a lot of places, we've assumed that the caller should always know
-     * what type a node output or error is, and that's fine -- except for the
-     * fact that this might be coming in off the wire and something else may
-     * have corrupted it.  Maybe we should treat these as explicit operational
-     * errors that always bubble up and cause execution of the saga to fail with
-     * a generic-type error.
-     */
-    pub fn action_failure_downcast<T: SagaActionOutput + 'static>(&self) -> T {
-        match self {
-            SagaActionError::ActionFailed { source_error } => {
-                serde_json::from_value(source_error.clone()).expect(
-                    "failed \
-                    to deserialize action failure error as requested type",
-                )
-            }
-            _ => panic!("wrong kind of SagaActionError"),
+    pub fn action_failed<E: SagaActionOutput + 'static>(
+        user_error: E,
+    ) -> SagaActionError {
+        match serde_json::to_value(user_error) {
+            Ok(source_error) => SagaActionError::ActionFailed {
+                source_error: SagaActionUserError(source_error),
+            },
+            Err(serialize_error) => SagaActionError::SerializeFailed {
+                message: serialize_error.to_string(),
+            },
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SagaActionUserError(JsonValue);
+
+impl SagaActionUserError {
+    pub fn action_failure_downcast<T: SagaActionOutput + 'static>(&self) -> T {
+        serde_json::from_value(self.0.clone()).expect(
+            "failed to deserialize action failure error as requested type",
+        )
     }
 }
 

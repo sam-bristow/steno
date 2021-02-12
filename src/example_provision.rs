@@ -49,12 +49,7 @@ type ExFuncResult<T> = SagaFuncResult<T, SagaActionError>;
 /* TODO-cleanup can we implement this generically? */
 impl From<ExampleError> for SagaActionError {
     fn from(t: ExampleError) -> SagaActionError {
-        match serde_json::to_value(t) {
-            Ok(source_error) => SagaActionError::ActionFailed { source_error },
-            Err(serialize_error) => SagaActionError::SerializeFailed {
-                message: serialize_error.to_string(),
-            },
-        }
+        SagaActionError::action_failed(t)
     }
 }
 
