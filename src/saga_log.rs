@@ -1,7 +1,6 @@
 //! Persistent state for sagas
 
 use crate::saga_template::SagaId;
-use crate::SagaError;
 use anyhow::anyhow;
 use anyhow::Context;
 use chrono::DateTime;
@@ -15,10 +14,24 @@ use std::fmt;
 use std::io::Read;
 use std::io::Write;
 use std::sync::Arc;
+use thiserror::Error;
 
 /* TODO-cleanup newtype for this? */
 type SagaNodeId = u64;
-type SagaLogResult = Result<(), SagaError>;
+
+#[derive(Debug, Error)]
+pub enum SagaLogError {
+    #[error(
+        "event type {event_type} is illegal with current \
+        load status {current_status:?}"
+    )]
+    IllegalEventForState {
+        current_status: SagaNodeLoadStatus,
+        event_type: SagaNodeEventType,
+    },
+}
+
+type SagaLogResult = Result<(), SagaLogError>;
 
 /**
  * Event types that may be found in the log for a particular action
@@ -88,7 +101,7 @@ impl SagaNodeLoadStatus {
     fn next_status(
         &self,
         event_type: &SagaNodeEventType,
-    ) -> Result<SagaNodeLoadStatus, SagaError> {
+    ) -> Result<SagaNodeLoadStatus, SagaLogError> {
         match (self, event_type) {
             (SagaNodeLoadStatus::NeverStarted, SagaNodeEventType::Started) => {
                 Ok(SagaNodeLoadStatus::Started)
@@ -111,11 +124,10 @@ impl SagaNodeLoadStatus {
                 SagaNodeLoadStatus::UndoStarted,
                 SagaNodeEventType::UndoFinished,
             ) => Ok(SagaNodeLoadStatus::UndoFinished),
-            _ => Err(anyhow!(
-                "saga node with status \"{:?}\": event \"{}\" is illegal",
-                self,
-                event_type
-            )),
+            _ => Err(SagaLogError::IllegalEventForState {
+                current_status: self.clone(),
+                event_type: event_type.clone(),
+            }),
         }
     }
 }
@@ -206,7 +218,8 @@ impl SagaLog {
          */
         async move { Ok(result) }
     }
-    fn record(&mut self, event: SagaNodeEvent) -> Result<(), SagaError> {
+
+    fn record(&mut self, event: SagaNodeEvent) -> Result<(), SagaLogError> {
         let current_status = self.load_status_for_node(event.node_id);
         let next_status = current_status.next_status(&event.event_type)?;
 

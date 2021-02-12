@@ -660,14 +660,18 @@ impl SagaExecutor {
      */
     // TODO Consider how we do map internal node indexes to stable node ids.
     // TODO clean up this interface
-    // TODO Decide what we want to do if this actually fails and handle it
-    // properly.
     async fn record_now(
         sglog: &mut SagaLog,
         node: NodeIndex,
         event_type: SagaNodeEventType,
     ) {
         let node_id = node.index() as u64;
+
+        /*
+         * The only possible failure here today is attempting to record an event
+         * that's illegal for the current node state.  That's a bug in this
+         * program.
+         */
         sglog.record_now(node_id, event_type).await.unwrap();
     }
 
